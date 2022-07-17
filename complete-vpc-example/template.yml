@@ -1,0 +1,527 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: ["AWS::Serverless-2016-10-31"]
+Description: >
+  Admin VPC & networking infrastructure
+Parameters:
+  Env:
+    Type: String
+  ShortRegion:
+    Type: String
+Resources:
+# VPCs
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.16.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+# Subnets
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 172.16.0.0/21
+      Tags:
+        - Key: Name
+          Value: !Sub 'admin-private-subnet_${AWS::Region}'
+        - Key: AZ
+          Value: !Select [0, !GetAZs '']
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      VpcId: !Ref VPC
+      CidrBlock: 172.16.8.0/21
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'admin-public-subnet_${AWS::Region}'
+        - Key: AZ
+          Value: !Select [0, !GetAZs '']
+  QuickSightSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 172.16.16.0/21
+      Tags:
+        - Key: Name
+          Value: !Sub 'admin-quicksight-subnet_${AWS::Region}'
+        - Key: AZ
+          Value: !Select [0, !GetAZs '']
+# Gateways
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+# Route tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'Public-RT-${AWS::StackName}'
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+# Resources specific to NAT instance
+  NATInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: InternetRoute
+    Properties:
+      ImageId: ami-0d729d2846a86a9e7
+      InstanceType: t2.micro
+      NetworkInterfaces:
+      - DeviceIndex: 0
+        SubnetId: !Ref PublicSubnet
+        AssociatePublicIpAddress: true
+        GroupSet: [!Ref NATSecurityGroup]
+      SourceDestCheck: false
+      Tags:
+      - Key: Name
+        Value: !Sub NAT-${AWS::StackName}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum -y update
+          yum install -y aws-cfn-bootstrap
+          echo 1 > /proc/sys/net/ipv4/ip_forward
+          echo 0 > /proc/sys/net/ipv4/conf/eth0/send_redirects
+          /sbin/iptables -t nat -A POSTROUTING -o eth0 -s 0.0.0.0/0 -j MASQUERADE
+          /sbin/iptables-save > /etc/sysconfig/iptables
+          mkdir -p /etc/sysctl.d/
+          cat << NatConfFileMarker > /etc/sysctl.d/nat.conf
+          net.ipv4.ip_forward = 1
+          net.ipv4.conf.eth0.send_redirects = 0
+          NatConfFileMarker
+          /opt/aws/bin/cfn-signal -e 0 --resource NATInstance --stack ${AWS::StackName} --region ${AWS::Region}
+    # Resource only shows as complete when UserData script completes
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT5M
+  NATSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      GroupName: !Sub NATSecurityGroup-${AWS::StackName}
+      GroupDescription: Enable internal access to the NAT device
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: !GetAtt VPC.CidrBlock
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: udp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'Private-RT-${AWS::StackName}'
+  NatRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NATInstance
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId:
+        Ref: NATInstance
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+# Instances 
+  #temp - tests Clone DB access. TODO: Clone DB will need to have same interface config.
+  TestCloneServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0015a39e4b7c0966f
+      InstanceType: t2.micro
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-TestCloneServerInstance'
+      KeyName: admin-key-prod-eu-west-2
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref CloneServerSecurityGroup
+        - !Ref PrivateSSHSecurityGroup
+      PrivateIpAddress: 172.16.0.99
+      UserData:
+        Fn::Base64:
+          !Sub |
+          #cloud-boothook
+          #!/bin/bash -xe
+          apt-get update -y
+          apt-get install mysql-server -y
+          echo 'bind-address            = 0.0.0.0' >> /etc/mysql/mysql.conf.d/mysqld.cnf && echo 'sql-mode=""' >> /etc/mysql/mysql.conf.d/mysqld.cnf
+          service mysql restart
+          mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'xBoo321';"
+          mysql -uroot -pxBoo321 -e "CREATE USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'xBoo321';"
+          mysql -uroot -pxBoo321 -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+          mysql -uroot -pxBoo321 -e "CREATE DATABASE test;"
+          mysql -uroot -pxBoo321 -e "CREATE TABLE users (name varchar(255), address varchar(255));"
+          mysql -uroot -pxBoo321 -e "INSERT into users (name, address) VALUES('ABC', '123');"
+          mysql -uroot -pxBoo321 -e "FLUSH PRIVILEGES;"
+          service mysql restart
+  #temp - tests Lambda access
+  TestLambdaInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0015a39e4b7c0966f
+      InstanceType: t2.micro
+      KeyName: admin-key-prod-eu-west-2
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-TestLambdaInstance'
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+        - !Ref PrivateSSHSecurityGroup
+  #temp - use as jump server until the new Admin API is created
+  TestAdminApiInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0015a39e4b7c0966f
+      InstanceType: t2.micro
+      KeyName: admin-key-prod-eu-west-2
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref AdminApiSecurityGroup
+        - !Ref BastionSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-TestAdminApiInstance'
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install lighttpd -y
+          systemctl start lighttpd
+          systemctl enable lighttpd
+          chmod 777 /var/www/html -R
+          echo Connected to the Admin API on port 80 ... $HOSTNAME > /var/www/html/index.html		      
+# SGs
+  PrivateSSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for allowing proxy jump SSH connection into private instances ${Env}'
+      VpcId: !Ref VPC
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for Admin DB Lambda Functions ${Env}'
+      VpcId: !Ref VPC
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for Admin DB ${Env}'
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          Description: Allow Outbound HTTPS
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+  CloneServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for Clone DB ${Env}'
+      VpcId: !Ref VPC
+      # temp
+      SecurityGroupIngress:
+        - IpProtocol: icmp
+          Description: Allow diagnostic echo requests from x (to test it is not publicly accessible)
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+  AdminApiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for Admin API ${Env}'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          Description: Allow inbound HTTP from internet
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          Description: Allow inbound HTTPS from internet
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          Description: Allow Outbound HTTPS
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          Description: Allow Outbound HTTP
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+  BastionSecurityGroup: # TODO: Add to the new Admin API so it can be used as a jump server
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        !Sub 'Security group for jump server instance in ${AWS::StackName}'
+      VpcId: !Ref VPC
+  QuickSightSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for Quicksight access to clone DB ${Env}'
+      VpcId: !Ref VPC
+
+# SG Rules
+  # Lambda Security Group
+  AdminApiAllowOutboundMySQLToDatabase:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow MySQL to Database
+      GroupId: !Ref AdminApiSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
+  LambdaAllowInboundFromGroup:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow MySQL from group
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+  LambdaAllowOutboundToGroup:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow MySQL to group
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      DestinationSecurityGroupId: !Ref LambdaSecurityGroup
+  LambdaAllowOutboundMySQLToDatabase:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow MySQL to DB
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
+  DatabaseAllowInboundMySQLFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow MySQL from Lambda
+      GroupId: !Ref DatabaseSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+  # DatabaseSecurityGroup
+  DatabaseAllowOutboundToClone:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow MySQL to Clone DB
+      GroupId: !Ref DatabaseSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      DestinationSecurityGroupId: !Ref CloneServerSecurityGroup
+  DatabaseAllowInboundMySQLFromAdminApi:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow MySQL from Admin API
+      GroupId: !Ref DatabaseSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref AdminApiSecurityGroup
+  # QuickSightSecurityGroup
+  QuickSightAllowInboundTCPFromCloneDB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow inbound TCP from Clone DB
+      GroupId: !Ref QuickSightSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref CloneServerSecurityGroup
+  QuickSightAllowOutboundMySQLToCloneDB:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow outbound MySQL to Clone DB
+      GroupId: !Ref QuickSightSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      DestinationSecurityGroupId: !Ref CloneServerSecurityGroup
+  # CloneServerSecurityGroup
+  CloneServerAllowMySQLFromDatabase:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow MySQL connections from Database
+      GroupId: !Ref CloneServerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref DatabaseSecurityGroup
+  CloneServerAllowMySQLFromQuicksight:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow MySQL connections from QuickSight
+      GroupId: !Ref CloneServerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref QuickSightSecurityGroup
+  CloneServerOutboundTCPToQuickSight:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow MySQL to Clone DB
+      GroupId: !Ref CloneServerSecurityGroup
+      IpProtocol: -1
+      DestinationSecurityGroupId: !Ref QuickSightSecurityGroup
+  # temp
+  CloneServerAllowICMPFromDatabase:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow diagnostic echo requests from Database
+      GroupId: !Ref CloneServerSecurityGroup
+      IpProtocol: icmp
+      FromPort: -1
+      ToPort: -1
+      SourceSecurityGroupId: !Ref DatabaseSecurityGroup
+  # BastionSecurityGroup
+  BastionDisallowInboundSSH:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Block all SSH (devs must add thier own IP rule)
+      GroupId: !Ref BastionSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: '0.0.0.0/32'
+  BastionAllowOutboundSSHToPrivateSSHGroup:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow SSH to private instance SG
+      GroupId: !Ref BastionSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      DestinationSecurityGroupId: !Ref PrivateSSHSecurityGroup
+  #PrivateSSHSecurityGroup
+  PrivateSSHGroupAllowInboundSSHFromBastion:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow SSH from Bastion SG
+      GroupId: !Ref PrivateSSHSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
+  VPC:
+    Description: 'API VPC'
+    Value: !Ref VPC
+    Export:
+      Name: !Ref AWS::StackName
+  PrivateSubnet:
+    Description: 'Private Subnet'
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet'
+  PublicSubnet:
+    Description: 'Public Subnet'
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet'
+  QuickSightSubnet:
+    Description: 'QuickSight Subnet'
+    Value: !Ref QuickSightSubnet
+    Export:
+      Name: !Sub '${AWS::StackName}-QuickSightSubnet'
+  DatabaseSecurityGroup:
+    Description: 'Database Security Group'
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseSecurityGroup'
+  QuickSightSecurityGroup:
+    Description: 'QuickSight Security Group'
+    Value: !Ref QuickSightSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-QuickSightSecurityGroup'
+  AdminApiSecurityGroup:
+    Description: 'Admin API Security Group'
+    Value: !Ref AdminApiSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-AdminApiSecurityGroup'
+  LambdaSecurityGroup:
+    Description: 'Lambda Security Group'
+    Value: !Ref LambdaSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaSecurityGroup'
+  PrivateSSHSecurityGroup:
+    Description: 'Accept SSH forwarding conections from Bastion Security Group'
+    Value: !Ref PrivateSSHSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSSHSecurityGroup'
+  BastionSecurityGroup:
+    Description: 'SSH Bastion Security Group'
+    Value: !Ref BastionSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-BastionSecurityGroup'
+  BastionPublicIp:
+    Description: 'Bastion Public IP'
+    Value: !Sub '${TestAdminApiInstance.PublicIp}'
+    Export:
+      Name: !Sub 'BastionPublicIp-${AWS::StackName}'
+  TestLambdaInstancePrivateIP:
+    Description: 'Test Lambda Instance IP'
+    Value: !Sub '${TestLambdaInstance.PrivateIp}'
+  TestCloneServerInstancePrivateIP:
+    Description: 'Test Clone Server Instance Private IP'
+    Value: !Sub '${TestCloneServerInstance.PrivateIp}'
+  TestAdminApiInstancePublicIP:
+    Description: 'Test Admin API Instance Public IP'
+    Value: !Sub '${TestAdminApiInstance.PublicIp}'
+  TestAdminApiInstancePrivateIP:
+    Description: 'Test Admin API Instance Private IP'
+    Value: !Sub '${TestAdminApiInstance.PrivateIp}'

@@ -1,0 +1,49 @@
+version = 0.1
+[staging-EU.deploy.parameters]
+stack_name = "ALB-eu-west-2-STAGING"
+region = "eu-west-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = [
+    "Env=staging",
+    "ALBName=ALB-eu-west-2-STAGING",
+    "CertificateARN=arn:aws:acm:eu-west-2:381927059233:certificate/0aeb0682-84eb-4b32-a51d-8a9fecff0ca6",
+    "ACLName=rate-limit-ACL-staging-EU"
+]
+
+[staging-US.deploy.parameters]
+stack_name = "ALB-us-west-2-STAGING"
+region = "us-west-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = [
+    "Env=staging",
+    "ALBName=ALB-us-west-2-STAGING",
+    "CertificateARN=arn:aws:acm:us-west-2:381927059233:certificate/6d2963ee-c30c-4846-9132-88180073b71a",
+    "ACLName=rate-limit-ACL-staging-US"
+]
+
+[prod-EU.deploy.parameters]
+stack_name = "ALB-eu-west-2-PROD"
+region = "eu-west-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = [
+    "Env=prod",
+    "ALBName=ALB-eu-west-2-PROD",
+    "CertificateARN=arn:aws:acm:eu-west-2:381927059233:certificate/cd3f1629-2552-4d89-a89c-96555ec7dec2",
+    "ACLName=rate-limit-ACL-prod-EU"
+]
+
+[prod-US.deploy.parameters]
+stack_name = "ALB-us-west-2-PROD"
+region = "us-west-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = [
+    "Env=prod",
+    "ALBName=ALB-us-west-2-PROD",
+    "CertificateARN=arn:aws:acm:us-west-2:381927059233:certificate/45e77572-0e9d-4ff3-b559-54bbca6bc4b9",
+    "ACLName=rate-limit-ACL-prod-US"
+]
+

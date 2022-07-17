@@ -1,0 +1,45 @@
+version = 0.1
+
+[staging-EU]
+[staging-EU.deploy]
+[staging-EU.deploy.parameters]
+stack_name = "api-vpc-staging-EU"
+s3_bucket = "infrastructure-templates-euw2"
+s3_prefix = "VPC-template_staging-EU"
+region = "eu-west-2"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Env=staging"
+
+[staging-US]
+[staging-US.deploy]
+[staging-US.deploy.parameters]
+stack_name = "api-vpc-staging-US"
+s3_bucket = "infrastructure-templates-usw2"
+s3_prefix = "VPC-template_staging-US"
+region = "us-west-2"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Env=staging"
+
+[prod-EU]
+[prod-EU.deploy]
+[prod-EU.deploy.parameters]
+stack_name = "api-vpc-prod-EU"
+s3_bucket = "infrastructure-templates-euw2"
+s3_prefix = "VPC-template_prod-EU"
+region = "eu-west-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Env=prod"
+
+[prod-US]
+[prod-US.deploy]
+[prod-US.deploy.parameters]
+stack_name = "api-vpc-prod-US"
+s3_bucket = "infrastructure-templates-usw2"
+s3_prefix = "VPC-template_prod-US"
+region = "us-west-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Env=prod"

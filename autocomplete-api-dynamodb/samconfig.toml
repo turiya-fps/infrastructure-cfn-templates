@@ -1,0 +1,44 @@
+version = 0.1
+[staging-EU]
+[staging-EU.deploy]
+[staging-EU.deploy.parameters]
+stack_name = "autocomplete-api-dynamodb-STAGING"
+s3_bucket = "infrastructure-templates-euw2"
+s3_prefix = "autocomplete-api-dynamodb-template_staging-EU"
+region = "eu-west-2"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = ["Env=staging DDBEndpointPrefixList=pl-b3a742da"]
+
+[staging-US]
+[staging-US.deploy]
+[staging-US.deploy.parameters]
+stack_name = "autocomplete-api-dynamodb-STAGING"
+s3_bucket = "infrastructure-templates-usw2"
+s3_prefix = "autocomplete-api-dynamodb-template_staging-US"
+region = "us-west-2"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = ["Env=staging DDBEndpointPrefixList=pl-00a54069"]
+
+[prod-EU]
+[prod-EU.deploy]
+[prod-EU.deploy.parameters]
+stack_name = "autocomplete-api-dynamodb-PROD"
+s3_bucket = "infrastructure-templates-euw2"
+s3_prefix = "autocomplete-api-dynamodb-template_prod-EU"
+region = "eu-west-2"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = ["Env=prod DDBEndpointPrefixList=pl-b3a742da"]
+
+[prod-US]
+[prod-US.deploy]
+[prod-US.deploy.parameters]
+stack_name = "autocomplete-api-dynamodb-PROD"
+s3_bucket = "infrastructure-templates-usw2"
+s3_prefix = "autocomplete-api-dynamodb-template_prod-US"
+region = "us-west-2"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = ["Env=prod DDBEndpointPrefixList=pl-00a54069"]

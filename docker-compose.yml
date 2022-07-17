@@ -1,0 +1,39 @@
+version: "3.5"
+
+services:
+  dynamodb:
+    container_name: regional-vpcs_dynamodb
+    hostname: dynamodb
+    image: amazon/dynamodb-local
+    networks:
+      - regional-vpcs
+    restart: unless-stopped
+    environment:
+      - DYNAMODB_PORT=${DYNAMODB_PORT}
+    ports:
+      - ${DYNAMODB_PORT}:${DYNAMODB_PORT}
+    volumes:
+      - dynamodata:/home/dynamodblocal
+    working_dir: /home/dynamodblocal
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ."
+  nodejs:
+    container_name: regional-vpcs_nodejs
+    depends_on:
+      - dynamodb
+    image: node:18
+    networks:
+      - regional-vpcs
+    restart: unless-stopped
+    environment:
+      - DYNAMODB_PORT=${DYNAMODB_PORT}
+    volumes:
+      - .:/src
+    working_dir: /src
+    command: bash -c "npm ci && tail -f /dev/null"
+
+networks:
+  regional-vpcs:
+    name: regional-vpcs
+
+volumes:
+  dynamodata: {}

@@ -1,0 +1,14 @@
+{
+  "name": "regional-vpcs",
+  "version": "1.0.0",
+  "description": "Scripts for creating local resources for development purposes.",
+  "scripts": {
+    "autocomplete-api-dynamodb:create": "node autocomplete-api-dynamodb/src/create.js",
+    "autocomplete-api-dynamodb:delete": "node autocomplete-api-dynamodb/src/delete.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.110.0"
+  },
+  "private": true
+}

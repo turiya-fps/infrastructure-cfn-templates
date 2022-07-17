@@ -1,0 +1,236 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Transform": ["AWS::Serverless-2016-10-31"],
+  "Description": "Template for DynamoDB Tables for Internal Tokens",
+  "Globals": {
+    "Function": {
+      "Timeout": 10
+    }
+  },
+  "Parameters": {
+    "Env": {
+      "Type": "String"
+    },
+    "DDBEndpointPrefixList": {
+      "Description": "The prefix list 'pl-xxxxxxx' value for DynamoDB in the deployment region.  Use 'aws ec2 describe-prefix-lists'",
+      "Type": "String"
+    }
+  },
+  "Resources": {
+    "TokensTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "Token",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "LastUpdateTimestampUsec",
+            "AttributeType": "N"
+          },
+          {
+            "AttributeName": "LastUpdateDatestamp",
+            "AttributeType": "N"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "Token",
+            "KeyType": "HASH"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "TableName": {
+          "Fn::Sub": "TokensTable-${Env}"
+        },
+        "GlobalSecondaryIndexes": [
+          {
+            "IndexName": "LastUpdateTimestampUsec",
+            "KeySchema": [
+              {
+                "AttributeName": "LastUpdateDatestamp",
+                "KeyType": "HASH"
+              },
+              {
+                "AttributeName": "LastUpdateTimestampUsec",
+                "KeyType": "RANGE"
+              }
+            ],
+            "Projection": {
+              "ProjectionType": "KEYS_ONLY"
+            }
+          }
+        ]
+      }
+    },
+    "TokensLastUpdateTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "LastUpdateTimestampUsec",
+            "AttributeType": "N"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "LastUpdateTimestampUsec",
+            "KeyType": "HASH"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "TableName": {
+          "Fn::Sub": "TokensLastUpdateTable-${Env}"
+        }
+      }
+    },
+    "DynamoDBEndpoint": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "*",
+              "Resource": [
+                {
+                  "Fn::Sub": [
+                    "arn:aws:dynamodb:${Region}:${Account}:table/${TableName}",
+                    {
+                      "Region": {
+                        "Ref": "AWS::Region"
+                      },
+                      "Account": {
+                        "Ref": "AWS::AccountId"
+                      },
+                      "TableName": {
+                        "Ref": "TokensTable"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "Fn::Sub": [
+                    "arn:aws:dynamodb:${Region}:${Account}:table/${TableName}/index/${IndexName}",
+                    {
+                      "Region": {
+                        "Ref": "AWS::Region"
+                      },
+                      "Account": {
+                        "Ref": "AWS::AccountId"
+                      },
+                      "TableName": {
+                        "Ref": "TokensTable"
+                      },
+                      "IndexName": "LastUpdateTimestampUsec"
+                    }
+                  ]
+                },
+                {
+                  "Fn::Sub": [
+                    "arn:aws:dynamodb:${Region}:${Account}:table/${TableName}",
+                    {
+                      "Region": {
+                        "Ref": "AWS::Region"
+                      },
+                      "Account": {
+                        "Ref": "AWS::AccountId"
+                      },
+                      "TableName": {
+                        "Ref": "TokensLastUpdateTable"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "RouteTableIds": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${Env}-${AWS::Region}-PublicRouteTable"
+            }
+          },
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${Env}-${AWS::Region}-PrivateRouteTable"
+            }
+          }
+        ],
+        "ServiceName": {
+          "Fn::Sub": [
+            "com.amazonaws.${Region}.dynamodb",
+            {
+              "Region": {
+                "Ref": "AWS::Region"
+              }
+            }
+          ]
+        },
+        "VpcId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${Env}-${AWS::Region}-VPC"
+          }
+        }
+      }
+    },
+    "DynamoDBSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for DynamoDB",
+        "VpcId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${Env}-${AWS::Region}-VPC"
+          }
+        },
+        "SecurityGroupEgress": [
+          {
+            "DestinationPrefixListId": {
+              "Fn::Sub": "${DDBEndpointPrefixList}"
+            },
+            "IpProtocol": -1
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "TokensTable": {
+      "Description": "DynamoDB Table for storing tokens",
+      "Value": {
+        "Ref": "TokensTable"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${Env}-${AWS::Region}-TokensTable"
+        }
+      }
+    },
+    "TokensLastUpdateTable": {
+      "Description": "DynamoDB Table for storing last updated token timestamps",
+      "Value": {
+        "Ref": "TokensLastUpdateTable"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${Env}-${AWS::Region}-TokensLastUpdateTable"
+        }
+      }
+    },
+    "DynamoDBSecurityGroup": {
+      "Description": "DynamoDB Table Security Group",
+      "Value": {
+        "Ref": "DynamoDBSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${Env}-${AWS::Region}-DynamoDBSecurityGroup"
+        }
+      }
+    }
+  }
+}

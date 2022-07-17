@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: ["AWS::Serverless-2016-10-31"]
+Description: >
+  VPC, subnet & networking infrastructure 
+
+Parameters:
+  Env:
+    Type: String
+
+Resources:
+
+# Networks
+  VPC:
+    Type: AWS::EC2::VPC
+    DeletionPolicy: Retain
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+  ALBSubnet1:
+    Type: AWS::EC2::Subnet
+    DeletionPolicy: Retain
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.8.0/23
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'alb-subnet-1_${AWS::Region}'
+        - Key: AZ
+          Value: !Select [0, !GetAZs '']
+  ALBSubnet2:
+    Type: AWS::EC2::Subnet
+    DeletionPolicy: Retain
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/23
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'alb-subnet-2_${AWS::Region}' 
+        - Key: AZ
+          Value: !Select [1, !GetAZs '']
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    DeletionPolicy: Retain
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.0.0/22
+      Tags:
+        - Key: Name
+          Value: !Sub 'private-subnet_${AWS::Region}'
+        - Key: AZ
+          Value: !Select [0, !GetAZs '']
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    DeletionPolicy: Retain
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/22
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'public-subnet_${AWS::Region}'
+        - Key: AZ
+          Value: !Select [0, !GetAZs '']
+
+# Gateways
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+# Route tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'Public-RT-${AWS::StackName}'
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'Private-RT-${AWS::StackName}'
+  ALBSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref ALBSubnet1
+  ALBSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref ALBSubnet2
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+# Endpoints
+  EndpointS3Regional:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref VPC
+      VpcEndpointType: Interface
+      SecurityGroupIds: 
+        - !Ref S3EndpointSecurityGroup
+      SubnetIds: 
+        - !Ref PrivateSubnet
+
+# Security Groups
+  S3EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the S3 Endpoint
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          Description: Lambda SG
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          Description: Lambda SG
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref LambdaSecurityGroup
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for Lambda/Cluster traffic ${Env}'
+      VpcId: !Ref VPC
+
+# Security Group Rules
+  LambdaAllowInboundFromGroup:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: -1      
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup          
+  LambdaAllowOutboundToGroup:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: -1
+      DestinationSecurityGroupId: !Ref LambdaSecurityGroup
+  LambdaAllowInboundHttpsFromS3Endpoint:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref LambdaSecurityGroup
+      Description: S3Endpoint
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref S3EndpointSecurityGroup
+  LambdaAllowOutboundHttpsToS3Endpoint:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref LambdaSecurityGroup
+      Description: S3Endpoint
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref S3EndpointSecurityGroup
+
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
+  VPC:
+    Description: 'API VPC'
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-VPC'
+  ALBSubnet1:
+    Description: 'ALB Subnet 1'
+    Value: !Ref ALBSubnet1
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-ALBSubnet1'
+  ALBSubnet2:
+    Description: 'ALB Subnet 2'
+    Value: !Ref ALBSubnet2
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-ALBSubnet2'
+  PrivateSubnet:
+    Description: 'Private Subnet'
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-PrivateSubnet'
+  PublicSubnet:
+    Description: 'Public Subnet'
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-PublicSubnet'
+  PublicRouteTable:
+    Description: 'Public Route Table'
+    Value: !Ref PublicRouteTable
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-PublicRouteTable'
+  PrivateRouteTable:
+    Description: 'Private Route Table'
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-PrivateRouteTable'
+  S3EndpointSecurityGroup:
+    Description: 'S3 Endpoint Security Group'
+    Value: !Ref S3EndpointSecurityGroup
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-S3EndpointSecurityGroup'
+  LambdaSecurityGroup:
+    Description: 'Lambda Security Group'
+    Value: !Ref LambdaSecurityGroup
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-LambdaSecurityGroup'
+  EndpointS3Regional:
+    Description: 'The VPC endpoint to S3'
+    Value: !Ref EndpointS3Regional
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-EndpointS3Regional'

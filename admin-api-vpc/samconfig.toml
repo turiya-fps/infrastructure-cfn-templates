@@ -1,0 +1,23 @@
+version = 0.1
+
+[staging]
+[staging.deploy]
+[staging.deploy.parameters]
+stack_name = "admin-vpc-staging"
+s3_bucket = "infrastructure-templates-euw2"
+s3_prefix = "admin-vpc-template_staging"
+region = "eu-west-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = ["Env=staging, ShortRegion=EU"]
+
+[prod]
+[prod.deploy]
+[prod.deploy.parameters]
+stack_name = "admin-vpc-prod"
+s3_bucket = "infrastructure-templates-euw2"
+s3_prefix = "admin-vpc-template_prod"
+region = "eu-west-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = ["Env=prod, ShortRegion=EU"]

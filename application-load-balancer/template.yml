@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: ["AWS::Serverless-2016-10-31"]
+Description: >
+  API LoadBalancer & Rate-Limiting ACL
+
+Parameters:
+  Env:
+    Type: String
+  ALBName:
+      Type: String
+  CertificateARN:
+      Type: String
+  ACLName:
+      Type: String
+
+Resources:
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref ALBName
+      Scheme: internet-facing 
+      Subnets:
+        - !ImportValue
+            'Fn::Sub': '${Env}-${AWS::Region}-ALBSubnet1'
+        - !ImportValue
+            'Fn::Sub': '${Env}-${AWS::Region}-ALBSubnet2'
+      SecurityGroups:
+      - !Ref LoadBalancerSecurityGroup
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId: !ImportValue
+              'Fn::Sub': '${Env}-${AWS::Region}-VPC'
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 444
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 444
+        CidrIp: 0.0.0.0/0
+
+  # HTTPS Requests on Port 443 (Default)
+  # Listener rules for this listener should be found in the target application's template
+  HttpsListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateARN
+      DefaultActions:
+      - Type: fixed-response
+        FixedResponseConfig:
+          StatusCode: 404
+          ContentType: "application/json"
+          MessageBody: '{ "msg": "Not found" }'
+
+  RateLimitACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Ref ACLName
+      Scope: REGIONAL
+      Description: Auto-generated rate-limiting ACL.
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: rate-limit-acl
+      CustomResponseBodies:
+        CustomResponseBodyKey1:
+          Content: |
+              {
+                "error": {
+                  "type": "too_many_requests",
+                  "message": "Rate Limit Exceeded"
+                }
+              }
+          ContentType: APPLICATION_JSON 
+      Rules:
+        - Name: rate-limit-cleanse
+          Priority: 1
+          Action:
+            Block:
+              CustomResponse:
+                ResponseCode: 429
+                CustomResponseBodyKey: CustomResponseBodyKey1
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: rate-limit-cleanse
+          Statement:
+            RateBasedStatement:
+              AggregateKeyType: "IP"
+              Limit: 6000
+              ScopeDownStatement:
+                ByteMatchStatement:
+                  SearchString: "cleanse"
+                  FieldToMatch:
+                    UriPath: {}
+                  TextTransformations:
+                    - Type: URL_DECODE
+                      Priority: 0
+                  PositionalConstraint: "CONTAINS_WORD"
+        - Name: allow-cleanse
+          Priority: 2
+          Action:
+            Allow: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: allow-cleanse
+          Statement:
+            ByteMatchStatement:
+              SearchString: "address/cleanse"
+              FieldToMatch:
+                UriPath: {}
+              TextTransformations:
+                - Type: URL_DECODE
+                  Priority: 0
+              PositionalConstraint: "CONTAINS_WORD"
+
+  WAFACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: !GetAtt [ RateLimitACL, Arn ]
+
+Outputs:
+  ALB:
+    Description: The loadbalancer
+    Value: !Ref LoadBalancer
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-LoadBalancer'
+  HttpsListener:
+    Description: The created HTTPS Listener
+    Value: !Ref HttpsListener
+    Export:
+      Name: !Sub '${Env}-${AWS::Region}-AlbListener'
+  LoadBalancerSecurityGroup:
+    Description: The created Security Group
+    Value: !Ref LoadBalancerSecurityGroup
